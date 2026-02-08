@@ -23,7 +23,7 @@ export default defineConfig({
     sourcemap: false,
     target: 'esnext',
     minify: false,
-    outDir: 'dist',
+    outDir: 'cli',
     emptyOutDir: false,
     lib: {
       entry: resolve(__dirname, 'src/cli.ts'),
