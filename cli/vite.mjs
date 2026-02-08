@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { execSync } from 'node:child_process';
 
 const C = {
   reset: "\x1B[0m",
@@ -86,8 +87,10 @@ function napcatHmrPlugin(options = {}) {
     wsUrl = "ws://127.0.0.1:8998",
     token,
     enabled = true,
-    autoConnect = true
+    autoConnect = true,
+    webui
   } = options;
+  const webuiConfigs = webui ? Array.isArray(webui) ? webui : [webui] : [];
   let rpc = null;
   let remotePluginPath = null;
   let connecting = false;
@@ -182,6 +185,37 @@ function napcatHmrPlugin(options = {}) {
     } catch (e) {
       logErr(`复制文件失败: ${e.message}`);
       return;
+    }
+    const projectRoot = config.root || process.cwd();
+    for (const wc of webuiConfigs) {
+      const webuiTargetDir = wc.targetDir || "webui";
+      const webuiDistDir = path.resolve(projectRoot, wc.distDir);
+      const webuiRoot = wc.root ? path.resolve(projectRoot, wc.root) : path.dirname(webuiDistDir);
+      if (wc.buildCommand) {
+        try {
+          log(`构建 WebUI (${co(webuiTargetDir, C.cyan)})...`);
+          execSync(wc.buildCommand, {
+            cwd: webuiRoot,
+            stdio: "pipe",
+            env: { ...process.env, NODE_ENV: "production" }
+          });
+          logOk(`WebUI (${webuiTargetDir}) 构建完成`);
+        } catch (e) {
+          logErr(`WebUI (${webuiTargetDir}) 构建失败: ${e.stderr?.toString() || e.message}`);
+          continue;
+        }
+      }
+      if (!fs.existsSync(webuiDistDir)) {
+        logErr(`WebUI 产物目录不存在: ${webuiDistDir}`);
+        continue;
+      }
+      try {
+        const webuiDestDir = path.join(destDir, webuiTargetDir);
+        copyDirRecursive(webuiDistDir, webuiDestDir);
+        logOk(`WebUI (${webuiTargetDir}) 已部署 (${countFiles(webuiDistDir)} 个文件)`);
+      } catch (e) {
+        logErr(`WebUI (${webuiTargetDir}) 部署失败: ${e.message}`);
+      }
     }
     try {
       const reloaded = await rpc.call("reloadPlugin", pluginName);

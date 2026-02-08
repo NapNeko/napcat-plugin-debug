@@ -170,14 +170,24 @@ function createWatcher(
   const watchers = new Map<string, fs.FSWatcher>();
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   let active = false;
-  const EXTS = new Set(['.js', '.mjs', '.cjs', '.ts', '.mts', '.json']);
+  const EXTS = new Set([
+    '.js', '.mjs', '.cjs', '.ts', '.mts', '.cts', '.json',
+    // 前端 / WebUI 相关
+    '.jsx', '.tsx', '.vue', '.svelte',
+    '.html', '.htm',
+    '.css', '.scss', '.sass', '.less', '.styl',
+    '.svg', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico',
+  ]);
+  const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.vite', '.cache']);
 
   function watchDir(name: string, dirPath: string) {
     try {
       const w = fs.watch(dirPath, { recursive: true, persistent: false }, (_ev, file) => {
         if (!file) return;
         if (!EXTS.has(path.extname(file))) return;
-        if (file.includes('node_modules') || file.startsWith('.')) return;
+        // 忽略构建产物和隐藏目录
+        const parts = file.split(/[\\/]/);
+        if (parts.some(p => IGNORE_DIRS.has(p) || p.startsWith('.'))) return;
         const t = timers.get(name);
         if (t) clearTimeout(t);
         timers.set(name, setTimeout(() => {

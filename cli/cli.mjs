@@ -5149,13 +5149,42 @@ function createWatcher(watchPath, onPluginChange) {
   const watchers = /* @__PURE__ */ new Map();
   const timers = /* @__PURE__ */ new Map();
   let active = false;
-  const EXTS = /* @__PURE__ */ new Set([".js", ".mjs", ".cjs", ".ts", ".mts", ".json"]);
+  const EXTS = /* @__PURE__ */ new Set([
+    ".js",
+    ".mjs",
+    ".cjs",
+    ".ts",
+    ".mts",
+    ".cts",
+    ".json",
+    // 前端 / WebUI 相关
+    ".jsx",
+    ".tsx",
+    ".vue",
+    ".svelte",
+    ".html",
+    ".htm",
+    ".css",
+    ".scss",
+    ".sass",
+    ".less",
+    ".styl",
+    ".svg",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".ico"
+  ]);
+  const IGNORE_DIRS = /* @__PURE__ */ new Set(["node_modules", ".git", "dist", "build", ".vite", ".cache"]);
   function watchDir(name, dirPath) {
     try {
       const w = fs.watch(dirPath, { recursive: true, persistent: false }, (_ev, file) => {
         if (!file) return;
         if (!EXTS.has(path.extname(file))) return;
-        if (file.includes("node_modules") || file.startsWith(".")) return;
+        const parts = file.split(/[\\/]/);
+        if (parts.some((p) => IGNORE_DIRS.has(p) || p.startsWith("."))) return;
         const t = timers.get(name);
         if (t) clearTimeout(t);
         timers.set(name, setTimeout(() => {

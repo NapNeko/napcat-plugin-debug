@@ -20,6 +20,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { execSync } from 'node:child_process';
 import type { Plugin, ResolvedConfig } from 'vite';
 
 // ======================== 类型 ========================
@@ -33,6 +34,51 @@ export interface NapcatHmrPluginOptions {
     enabled?: boolean;
     /** 首次构建完成后是否自动连接 (默认: true) */
     autoConnect?: boolean;
+    /**
+     * WebUI 配置 — 支持 Vite+React / 纯 HTML 等前端子项目
+     *
+     * 设置后，每次主插件构建完成时会：
+     *   1. 执行 WebUI 的构建命令（如果配置了 buildCommand）
+     *   2. 将 WebUI 产物目录复制到部署目标的指定子目录
+     *
+     * 示例 (Vite+React WebUI)：
+     *   webui: {
+     *     root: './webui',
+     *     buildCommand: 'npm run build',
+     *     distDir: './webui/dist',
+     *     targetDir: 'webui',
+     *   }
+     *
+     * 示例 (纯 HTML)：
+     *   webui: {
+     *     distDir: './webui',
+     *     targetDir: 'webui',
+     *   }
+     */
+    webui?: WebuiConfig | WebuiConfig[];
+}
+
+export interface WebuiConfig {
+    /**
+     * WebUI 项目根目录（用于执行构建命令的 cwd）
+     * 相对于 Vite 项目根目录，默认为 distDir 所在目录
+     */
+    root?: string;
+    /**
+     * 构建命令（如 'npm run build'、'pnpm build' 等）
+     * 不设置则跳过构建，只复制 distDir 的内容
+     */
+    buildCommand?: string;
+    /**
+     * WebUI 构建产物目录（相对于 Vite 项目根目录）
+     * 这个目录的内容会被复制到部署目标
+     */
+    distDir: string;
+    /**
+     * 部署到远程插件目录中的子目录名（默认: 'webui'）
+     * 例如设为 'webui'，则产物会被复制到 <pluginDir>/webui/
+     */
+    targetDir?: string;
 }
 
 interface RpcRequest {
@@ -135,7 +181,13 @@ export function napcatHmrPlugin(options: NapcatHmrPluginOptions = {}): Plugin {
         token,
         enabled = true,
         autoConnect = true,
+        webui,
     } = options;
+
+    // 标准化 webui 配置为数组
+    const webuiConfigs: WebuiConfig[] = webui
+        ? (Array.isArray(webui) ? webui : [webui])
+        : [];
 
     let rpc: SimpleRpcClient | null = null;
     let remotePluginPath: string | null = null;
@@ -243,7 +295,7 @@ export function napcatHmrPlugin(options: NapcatHmrPluginOptions = {}): Plugin {
 
         const destDir = path.join(remotePluginPath, pluginName);
 
-        // 复制文件
+        // 复制主构建产物
         try {
             if (fs.existsSync(destDir)) {
                 fs.rmSync(destDir, { recursive: true, force: true });
@@ -252,6 +304,44 @@ export function napcatHmrPlugin(options: NapcatHmrPluginOptions = {}): Plugin {
         } catch (e: any) {
             logErr(`复制文件失败: ${e.message}`);
             return;
+        }
+
+        // 处理 WebUI 构建和部署
+        const projectRoot = config.root || process.cwd();
+        for (const wc of webuiConfigs) {
+            const webuiTargetDir = wc.targetDir || 'webui';
+            const webuiDistDir = path.resolve(projectRoot, wc.distDir);
+            const webuiRoot = wc.root ? path.resolve(projectRoot, wc.root) : path.dirname(webuiDistDir);
+
+            // 执行 WebUI 构建命令
+            if (wc.buildCommand) {
+                try {
+                    log(`构建 WebUI (${co(webuiTargetDir, C.cyan)})...`);
+                    execSync(wc.buildCommand, {
+                        cwd: webuiRoot,
+                        stdio: 'pipe',
+                        env: { ...process.env, NODE_ENV: 'production' },
+                    });
+                    logOk(`WebUI (${webuiTargetDir}) 构建完成`);
+                } catch (e: any) {
+                    logErr(`WebUI (${webuiTargetDir}) 构建失败: ${e.stderr?.toString() || e.message}`);
+                    continue;
+                }
+            }
+
+            // 复制 WebUI 产物到部署目录
+            if (!fs.existsSync(webuiDistDir)) {
+                logErr(`WebUI 产物目录不存在: ${webuiDistDir}`);
+                continue;
+            }
+
+            try {
+                const webuiDestDir = path.join(destDir, webuiTargetDir);
+                copyDirRecursive(webuiDistDir, webuiDestDir);
+                logOk(`WebUI (${webuiTargetDir}) 已部署 (${countFiles(webuiDistDir)} 个文件)`);
+            } catch (e: any) {
+                logErr(`WebUI (${webuiTargetDir}) 部署失败: ${e.message}`);
+            }
         }
 
         // 重载插件
