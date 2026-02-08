@@ -1,6 +1,6 @@
 {
   "name": "napcat-plugin-debug-cli",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "type": "module",
   "description": "NapCat 插件调试 CLI — 连接调试服务实现热重载",
   "author": "NapNeko",

@@ -198,12 +198,11 @@ function napcatHmrPlugin(options = {}) {
           log(`构建 WebUI (${co(webuiTargetDir, C.cyan)})...`);
           execSync(wc.buildCommand, {
             cwd: webuiRoot,
-            stdio: "pipe",
-            env: { ...process.env, NODE_ENV: "production" }
+            stdio: "pipe"
           });
           logOk(`WebUI (${webuiTargetDir}) 构建完成`);
         } catch (e) {
-          logErr(`WebUI (${webuiTargetDir}) 构建失败: ${e.stderr?.toString() || e.message}`);
+          logErr(`WebUI (${webuiTargetDir}) 构建失败: ${e.stderr?.toString() || e.stdout?.toString() || e.message}`);
           continue;
         }
       }
@@ -270,12 +269,11 @@ function napcatHmrPlugin(options = {}) {
           log(`构建 WebUI (${co(webuiTargetDir, C.cyan)})...`);
           execSync(wc.buildCommand, {
             cwd: webuiRoot,
-            stdio: "pipe",
-            env: { ...process.env, NODE_ENV: "production" }
+            stdio: "pipe"
           });
           logOk(`WebUI (${webuiTargetDir}) 构建完成`);
         } catch (e) {
-          logErr(`WebUI (${webuiTargetDir}) 构建失败: ${e.stderr?.toString() || e.message}`);
+          logErr(`WebUI (${webuiTargetDir}) 构建失败: ${e.stderr?.toString() || e.stdout?.toString() || e.message}`);
           continue;
         }
       }
