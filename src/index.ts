@@ -40,12 +40,12 @@ export const plugin_init: PluginModule['plugin_init'] = async (ctx) => {
   // 生成配置 Schema
   plugin_config_ui = ctx.NapCatConfig.combine(
     ctx.NapCatConfig.html(`
-      <div style="padding:16px 20px;background:#1a1a2e;border:1px solid #30305a;border-radius:8px;margin-bottom:16px;color:#e0e0e0;font-family:system-ui,-apple-system,sans-serif">
+      <div style="padding:16px 20px;background:#fdf2f8;border:1px solid #f5c6d8;border-radius:8px;margin-bottom:16px;color:#4a3040;font-family:system-ui,-apple-system,sans-serif">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
-          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#7c8aff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.376 3.622a1 1 0 0 1 3.002 3.002L7.368 18.635a2 2 0 0 1-.855.506l-2.872.838a.5.5 0 0 1-.62-.62l.838-2.872a2 2 0 0 1 .506-.855z"/></svg>
-          <span style="font-size:16px;font-weight:600;color:#fff">Plugin Debug Service</span>
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#d4709a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.376 3.622a1 1 0 0 1 3.002 3.002L7.368 18.635a2 2 0 0 1-.855.506l-2.872.838a.5.5 0 0 1-.62-.62l.838-2.872a2 2 0 0 1 .506-.855z"/></svg>
+          <span style="font-size:16px;font-weight:600;color:#8b3a62">Plugin Debug Service</span>
         </div>
-        <p style="margin:0;font-size:13px;line-height:1.6;color:#a0a0b8">
+        <p style="margin:0;font-size:13px;line-height:1.6;color:#7a506b">
           WebSocket 调试服务器，通过 JSON-RPC 协议暴露插件管理接口，配合 Vite 插件或 CLI 工具实现插件热重载开发。
         </p>
       </div>
@@ -53,9 +53,9 @@ export const plugin_init: PluginModule['plugin_init'] = async (ctx) => {
     ctx.NapCatConfig.number('port', '调试服务端口', 8998, 'WebSocket 监听端口'),
     ctx.NapCatConfig.text('host', '监听地址', '127.0.0.1', '仅限本地调试时使用 127.0.0.1；改为 0.0.0.0 会暴露在网络中，存在安全风险'),
     ctx.NapCatConfig.html(`
-      <div style="padding:10px 14px;background:#2a1a1a;border-left:3px solid #e74c3c;border-radius:4px;margin:8px 0;font-family:system-ui,-apple-system,sans-serif">
-        <p style="margin:0;font-size:12px;line-height:1.6;color:#e8a0a0">
-          <strong style="color:#f0c0c0">安全提示：</strong>默认不启用认证，任何能访问该端口的客户端均可执行插件管理操作（加载、卸载、重载插件等）。
+      <div style="padding:10px 14px;background:#fef2f2;border-left:3px solid #ef4444;border-radius:4px;margin:8px 0;font-family:system-ui,-apple-system,sans-serif">
+        <p style="margin:0;font-size:12px;line-height:1.6;color:#7f1d1d">
+          <strong style="color:#991b1b">安全提示：</strong>默认不启用认证，任何能访问该端口的客户端均可执行插件管理操作（加载、卸载、重载插件等）。
           如需远程调试，请务必启用认证并设置高强度 Token，同时通过防火墙限制来源 IP。建议优先使用 SSH 隧道转发端口。
         </p>
       </div>
