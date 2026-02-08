@@ -198,13 +198,20 @@ function createWatcher(
       active = true;
 
       if (fs.existsSync(path.join(watchPath, 'package.json'))) {
-        // 单个插件
-        watchDir(path.basename(watchPath), watchPath);
-        logHmr(`监听插件: ${path.basename(watchPath)}`);
+        // 单个插件（排除 debug 插件自身）
+        const baseName = path.basename(watchPath);
+        if (baseName === 'napcat-plugin-debug') {
+          logWarn('跳过 napcat-plugin-debug 自身，不能监听自我重载');
+        } else {
+          watchDir(baseName, watchPath);
+          logHmr(`监听插件: ${baseName}`);
+        }
       } else {
-        // 整个插件目录
+        // 整个插件目录（排除 debug 插件自身）
         for (const d of fs.readdirSync(watchPath, { withFileTypes: true })) {
-          if (d.isDirectory()) watchDir(d.name, path.join(watchPath, d.name));
+          if (d.isDirectory() && d.name !== 'napcat-plugin-debug') {
+            watchDir(d.name, path.join(watchPath, d.name));
+          }
         }
         logHmr(`监听 ${watchers.size} 个插件: ${watchPath}`);
       }

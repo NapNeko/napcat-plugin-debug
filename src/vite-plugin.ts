@@ -263,9 +263,9 @@ export function napcatHmrPlugin(options: NapcatHmrPluginOptions = {}): Plugin {
             }
             logHmr(`${co(pluginName, C.green, C.bold)} 已重载 (${countFiles(distDir)} 个文件)`);
         } catch {
-            // 首次加载 — loadDirectoryPlugin 期望目录名（非完整路径）
+            // 首次加载 — loadDirectoryPlugin 需要完整目录路径
             try {
-                await rpc.call('loadDirectoryPlugin', pluginName);
+                await rpc.call('loadDirectoryPlugin', destDir);
                 // 新注册的插件默认禁用，需要手动启用并加载
                 try {
                     await rpc.call('setPluginStatus', pluginName, true);

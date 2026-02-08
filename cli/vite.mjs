@@ -191,7 +191,7 @@ function napcatHmrPlugin(options = {}) {
       logHmr(`${co(pluginName, C.green, C.bold)} 已重载 (${countFiles(distDir)} 个文件)`);
     } catch {
       try {
-        await rpc.call("loadDirectoryPlugin", pluginName);
+        await rpc.call("loadDirectoryPlugin", destDir);
         try {
           await rpc.call("setPluginStatus", pluginName, true);
           await rpc.call("loadPluginById", pluginName);

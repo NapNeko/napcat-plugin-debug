@@ -107,6 +107,10 @@ export class DebugServer {
     }
   }
 
+  // ==================== 自身插件 ID ====================
+
+  private static readonly SELF_PLUGIN_ID = 'napcat-plugin-debug';
+
   // ==================== JSON-RPC 方法路由 ====================
 
   private async handleRpc(req: RpcRequest): Promise<RpcResponse> {
@@ -159,14 +163,30 @@ export class DebugServer {
           result = await pm.loadPluginById(params[0] as string);
           break;
 
-        case 'unregisterPlugin':
-          await pm.unregisterPlugin(params[0] as string);
+        case 'unregisterPlugin': {
+          const targetId = params[0] as string;
+          if (targetId === DebugServer.SELF_PLUGIN_ID) {
+            return {
+              jsonrpc: '2.0', id: req.id,
+              error: { code: -32001, message: '不能通过调试服务卸载自身 (napcat-plugin-debug)' },
+            };
+          }
+          await pm.unregisterPlugin(targetId);
           result = true;
           break;
+        }
 
-        case 'reloadPlugin':
-          result = await pm.reloadPlugin(params[0] as string);
+        case 'reloadPlugin': {
+          const targetId = params[0] as string;
+          if (targetId === DebugServer.SELF_PLUGIN_ID) {
+            return {
+              jsonrpc: '2.0', id: req.id,
+              error: { code: -32001, message: '不能通过调试服务重载自身 (napcat-plugin-debug)' },
+            };
+          }
+          result = await pm.reloadPlugin(targetId);
           break;
+        }
 
         case 'scanPlugins':
           result = await pm.scanPlugins();
@@ -177,10 +197,18 @@ export class DebugServer {
           result = true;
           break;
 
-        case 'uninstallPlugin':
-          await pm.uninstallPlugin(params[0] as string, params[1] as boolean);
+        case 'uninstallPlugin': {
+          const targetId = params[0] as string;
+          if (targetId === DebugServer.SELF_PLUGIN_ID) {
+            return {
+              jsonrpc: '2.0', id: req.id,
+              error: { code: -32001, message: '不能通过调试服务卸载自身 (napcat-plugin-debug)' },
+            };
+          }
+          await pm.uninstallPlugin(targetId, params[1] as boolean);
           result = true;
           break;
+        }
 
         case 'getPluginDataPath':
           result = pm.getPluginDataPath(params[0] as string);
