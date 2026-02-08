@@ -315,7 +315,12 @@ async function deployPlugin(
     // 插件可能尚未加载过，尝试直接从目录加载
     try {
       logInfo('插件未注册，尝试从目录加载...');
-      await rpc.call('loadDirectoryPlugin', destDir);
+      await rpc.call('loadDirectoryPlugin', pluginName);
+      // 新注册的插件默认禁用，需要启用并加载
+      try {
+        await rpc.call('setPluginStatus', pluginName, true);
+        await rpc.call('loadPluginById', pluginName);
+      } catch { /* 如果已经启用则忽略 */ }
       logOk(`${co(pluginName, C.green, C.bold)} 首次加载成功`);
     } catch (e2: any) {
       logWarn(`自动加载失败: ${e2.message}，请手动 load ${pluginName}`);

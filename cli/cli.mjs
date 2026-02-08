@@ -5272,7 +5272,12 @@ async function deployPlugin(projectDir, remotePluginPath, rpc) {
   } catch {
     try {
       logInfo("插件未注册，尝试从目录加载...");
-      await rpc.call("loadDirectoryPlugin", destDir);
+      await rpc.call("loadDirectoryPlugin", pluginName);
+      try {
+        await rpc.call("setPluginStatus", pluginName, true);
+        await rpc.call("loadPluginById", pluginName);
+      } catch {
+      }
       logOk(`${co(pluginName, C.green, C.bold)} 首次加载成功`);
     } catch (e2) {
       logWarn(`自动加载失败: ${e2.message}，请手动 load ${pluginName}`);

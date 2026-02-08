@@ -162,7 +162,7 @@ napcat-debug --watch ./dist
 | `unregisterPlugin` | `[id]` | 注销插件 |
 | `reloadPlugin` | `[id]` | 重载插件（热重载核心方法） |
 | `scanPlugins` | - | 扫描插件目录 |
-| `loadDirectoryPlugin` | `[path]` | 从指定目录加载插件 |
+| `loadDirectoryPlugin` | `[dirname]` | 从指定目录名加载插件（相对于插件根目录的目录名，非完整路径） |
 | `uninstallPlugin` | `[id, removeData]` | 卸载插件 |
 | `getPluginDataPath` | `[id]` | 获取插件数据目录 |
 | `getPluginConfigPath` | `[id]` | 获取插件配置路径 |
