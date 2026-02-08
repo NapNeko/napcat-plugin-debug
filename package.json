@@ -1,0 +1,34 @@
+{
+  "name": "napcat-plugin-debug",
+  "plugin": "插件调试服务",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.mjs",
+  "description": "NapCat 插件调试服务 — 通过 WS 暴露 PluginManager API，配合 CLI 实现热重载",
+  "author": "NapNeko",
+  "napcat": {
+    "tags": [
+      "开发工具"
+    ],
+    "minVersion": "4.14.0",
+    "homepage": "https://github.com/NapNeko/napcat-plugin-debug"
+  },
+  "dependencies": {
+    "napcat-types": "0.0.16"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.1",
+    "@types/ws": "^8.18.3",
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "vite": "^6.4.1",
+    "typescript": "^5.3.0",
+    "ws": "^8.18.3"
+  },
+  "scripts": {
+    "build": "vite build && vite build -c vite.cli.config.ts",
+    "build:plugin": "vite build",
+    "build:cli": "vite build -c vite.cli.config.ts",
+    "watch": "vite build --watch",
+    "typecheck": "tsc --noEmit"
+  }
+}
