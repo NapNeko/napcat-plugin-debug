@@ -21,6 +21,9 @@ export class DebugServer {
   }
 
   async start(): Promise<void> {
+    // 禁用 bufferutil 可选依赖，避免在打包环境中 bufferUtil.unmask 报错
+    process.env.WS_NO_BUFFER_UTIL = '1';
+    process.env.WS_NO_UTF_8_VALIDATE = '1';
     // ws 在 NapCat 运行环境中可用（NapCat 的根 dependencies 包含 ws）
     const { WebSocketServer } = await import('ws');
 

@@ -12,16 +12,16 @@ const nodeModules = [
   ...builtinModules.map((m) => `node:${m}`),
 ].flat();
 
-// 依赖排除
-const external: string[] = [];
+// 依赖排除 — ws 必须排除，不能被打包（打包会导致 bufferutil 可选依赖报错）
+const external: string[] = ['ws'];
 
 /**
  * 构建后生成精简 package.json 的 Vite 插件
  */
-function copyAssetsPlugin () {
+function copyAssetsPlugin() {
   return {
     name: 'copy-assets',
-    writeBundle () {
+    writeBundle() {
       try {
         const distDir = resolve(__dirname, 'dist');
 
@@ -44,12 +44,12 @@ function copyAssetsPlugin () {
             resolve(distDir, 'package.json'),
             JSON.stringify(distPkg, null, 2)
           );
-          console.log('[copy-assets] ✅ 已生成精简 package.json');
+          console.log('[copy-assets] (o\'v\'o) 已生成精简 package.json');
         }
 
-        console.log('[copy-assets] 🎉 构建完成！将 dist/ 目录复制到 NapCat 的 plugins/ 即可');
+        console.log('[copy-assets] (*\'v\'*) 构建完成！将 dist/ 目录复制到 NapCat 的 plugins/ 即可');
       } catch (error) {
-        console.error('[copy-assets] ❌ 资源复制失败:', error);
+        console.error('[copy-assets] (;_;) 资源复制失败:', error);
       }
     },
   };

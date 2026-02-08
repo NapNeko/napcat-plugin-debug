@@ -16,9 +16,9 @@ const C = {
 const co = (t, ...c) => c.join("") + t + C.reset;
 const PREFIX = co("[napcat-hmr]", C.magenta, C.bold);
 const log = (m) => console.log(`${PREFIX} ${m}`);
-const logOk = (m) => console.log(`${PREFIX} ${co("✓", C.green)} ${m}`);
-const logErr = (m) => console.log(`${PREFIX} ${co("✗", C.red)} ${m}`);
-const logHmr = (m) => console.log(`${PREFIX} ${co("🔥", C.magenta)} ${co(m, C.magenta)}`);
+const logOk = (m) => console.log(`${PREFIX} ${co("(o'v'o)", C.green)} ${m}`);
+const logErr = (m) => console.log(`${PREFIX} ${co("(;_;)", C.red)} ${m}`);
+const logHmr = (m) => console.log(`${PREFIX} ${co("(&gt;&lt;)", C.yellow)} ${co(m, C.magenta)}`);
 class SimpleRpcClient {
   ws;
   nextId = 1;
@@ -98,6 +98,8 @@ function napcatHmrPlugin(options = {}) {
     if (connecting) return false;
     connecting = true;
     try {
+      process.env.WS_NO_BUFFER_UTIL = "1";
+      process.env.WS_NO_UTF_8_VALIDATE = "1";
       const { default: WebSocket } = await import('ws');
       let url = wsUrl;
       if (token) {
@@ -182,11 +184,19 @@ function napcatHmrPlugin(options = {}) {
       return;
     }
     try {
-      await rpc.call("reloadPlugin", pluginName);
+      const reloaded = await rpc.call("reloadPlugin", pluginName);
+      if (reloaded === false) {
+        throw new Error("not registered");
+      }
       logHmr(`${co(pluginName, C.green, C.bold)} 已重载 (${countFiles(distDir)} 个文件)`);
     } catch {
       try {
-        await rpc.call("loadDirectoryPlugin", destDir);
+        await rpc.call("loadDirectoryPlugin", pluginName);
+        try {
+          await rpc.call("setPluginStatus", pluginName, true);
+          await rpc.call("loadPluginById", pluginName);
+        } catch {
+        }
         logOk(`${co(pluginName, C.green, C.bold)} 首次加载成功`);
       } catch (e2) {
         logErr(`加载失败: ${e2.message}`);

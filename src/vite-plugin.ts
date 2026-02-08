@@ -54,9 +54,9 @@ const co = (t: string, ...c: string[]) => c.join('') + t + C.reset;
 
 const PREFIX = co('[napcat-hmr]', C.magenta, C.bold);
 const log = (m: string) => console.log(`${PREFIX} ${m}`);
-const logOk = (m: string) => console.log(`${PREFIX} ${co('✓', C.green)} ${m}`);
-const logErr = (m: string) => console.log(`${PREFIX} ${co('✗', C.red)} ${m}`);
-const logHmr = (m: string) => console.log(`${PREFIX} ${co('🔥', C.magenta)} ${co(m, C.magenta)}`);
+const logOk = (m: string) => console.log(`${PREFIX} ${co('(o\'v\'o)', C.green)} ${m}`);
+const logErr = (m: string) => console.log(`${PREFIX} ${co('(;_;)', C.red)} ${m}`);
+const logHmr = (m: string) => console.log(`${PREFIX} ${co('(&gt;&lt;)', C.yellow)} ${co(m, C.magenta)}`);
 
 // ======================== 简易 JSON-RPC 客户端 ========================
 
@@ -152,6 +152,9 @@ export function napcatHmrPlugin(options: NapcatHmrPluginOptions = {}): Plugin {
         connecting = true;
 
         try {
+            // 禁用 bufferutil 可选依赖，避免打包环境兼容问题
+            process.env.WS_NO_BUFFER_UTIL = '1';
+            process.env.WS_NO_UTF_8_VALIDATE = '1';
             // 动态 import ws — 在 NapCat/Node.js 环境下 ws 可用
             const { default: WebSocket } = await import('ws');
 
@@ -253,12 +256,21 @@ export function napcatHmrPlugin(options: NapcatHmrPluginOptions = {}): Plugin {
 
         // 重载插件
         try {
-            await rpc.call('reloadPlugin', pluginName);
+            const reloaded = await rpc.call('reloadPlugin', pluginName);
+            if (reloaded === false) {
+                // 插件未注册，走首次加载流程
+                throw new Error('not registered');
+            }
             logHmr(`${co(pluginName, C.green, C.bold)} 已重载 (${countFiles(distDir)} 个文件)`);
         } catch {
-            // 首次加载
+            // 首次加载 — loadDirectoryPlugin 期望目录名（非完整路径）
             try {
-                await rpc.call('loadDirectoryPlugin', destDir);
+                await rpc.call('loadDirectoryPlugin', pluginName);
+                // 新注册的插件默认禁用，需要手动启用并加载
+                try {
+                    await rpc.call('setPluginStatus', pluginName, true);
+                    await rpc.call('loadPluginById', pluginName);
+                } catch { /* 如果已经启用则忽略 */ }
                 logOk(`${co(pluginName, C.green, C.bold)} 首次加载成功`);
             } catch (e2: any) {
                 logErr(`加载失败: ${e2.message}`);
