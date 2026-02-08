@@ -79,6 +79,20 @@ export interface WebuiConfig {
      * 例如设为 'webui'，则产物会被复制到 <pluginDir>/webui/
      */
     targetDir?: string;
+    /**
+     * WebUI 源码监听目录（相对于 Vite 项目根目录）
+     *
+     * 在 `vite build --watch` 模式下，后端 Vite 只监听后端入口的依赖图，
+     * WebUI 源码的变化不会触发后端重新构建。
+     *
+     * 设置此项后，插件会独立监听该目录，检测到文件变化时自动：
+     *   1. 执行 buildCommand（如果配置了）
+     *   2. 将 distDir 产物复制到远程部署目录
+     *   3. 触发插件重载
+     *
+     * 示例：watchDir: './src/webui/src'
+     */
+    watchDir?: string;
 }
 
 interface RpcRequest {
@@ -194,6 +208,8 @@ export function napcatHmrPlugin(options: NapcatHmrPluginOptions = {}): Plugin {
     let connecting = false;
     let config: ResolvedConfig;
     let isFirstBuild = true;
+    const webuiWatchers: fs.FSWatcher[] = [];
+    let webuiDeployDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
     /**
      * 连接到调试服务
@@ -368,6 +384,129 @@ export function napcatHmrPlugin(options: NapcatHmrPluginOptions = {}): Plugin {
         }
     }
 
+    /**
+     * 仅部署 WebUI（不重新构建后端，独立于 writeBundle）
+     */
+    async function deployWebuiOnly(): Promise<void> {
+        if (!rpc?.connected || !remotePluginPath) {
+            logErr('未连接到调试服务，跳过 WebUI 部署');
+            return;
+        }
+
+        const distDir = path.resolve(config.build.outDir);
+        const pkgPath = path.join(distDir, 'package.json');
+        if (!fs.existsSync(pkgPath)) {
+            logErr('dist/package.json 不存在，跳过 WebUI 部署');
+            return;
+        }
+
+        let pluginName: string;
+        try {
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+            pluginName = pkg.name;
+            if (!pluginName) return;
+        } catch {
+            return;
+        }
+
+        const destDir = path.join(remotePluginPath, pluginName);
+        const projectRoot = config.root || process.cwd();
+
+        let hasChanges = false;
+        for (const wc of webuiConfigs) {
+            const webuiTargetDir = wc.targetDir || 'webui';
+            const webuiDistDir = path.resolve(projectRoot, wc.distDir);
+            const webuiRoot = wc.root ? path.resolve(projectRoot, wc.root) : path.dirname(webuiDistDir);
+
+            // 执行 WebUI 构建命令
+            if (wc.buildCommand) {
+                try {
+                    log(`构建 WebUI (${co(webuiTargetDir, C.cyan)})...`);
+                    execSync(wc.buildCommand, {
+                        cwd: webuiRoot,
+                        stdio: 'pipe',
+                        env: { ...process.env, NODE_ENV: 'production' },
+                    });
+                    logOk(`WebUI (${webuiTargetDir}) 构建完成`);
+                } catch (e: any) {
+                    logErr(`WebUI (${webuiTargetDir}) 构建失败: ${e.stderr?.toString() || e.message}`);
+                    continue;
+                }
+            }
+
+            // 复制 WebUI 产物到部署目录
+            if (!fs.existsSync(webuiDistDir)) {
+                logErr(`WebUI 产物目录不存在: ${webuiDistDir}`);
+                continue;
+            }
+
+            try {
+                const webuiDestDir = path.join(destDir, webuiTargetDir);
+                if (fs.existsSync(webuiDestDir)) {
+                    fs.rmSync(webuiDestDir, { recursive: true, force: true });
+                }
+                copyDirRecursive(webuiDistDir, webuiDestDir);
+                logOk(`WebUI (${webuiTargetDir}) 已部署 (${countFiles(webuiDistDir)} 个文件)`);
+                hasChanges = true;
+            } catch (e: any) {
+                logErr(`WebUI (${webuiTargetDir}) 部署失败: ${e.message}`);
+            }
+        }
+
+        // 重载插件
+        if (hasChanges) {
+            try {
+                await rpc.call('reloadPlugin', pluginName);
+                logHmr(`${co(pluginName, C.green, C.bold)} 已重载 (WebUI 更新)`);
+            } catch (e: any) {
+                logErr(`重载失败: ${e.message}`);
+            }
+        }
+    }
+
+    /**
+     * 启动 WebUI 源码目录监听
+     */
+    function startWebuiWatchers(projectRoot: string): void {
+        for (const wc of webuiConfigs) {
+            if (!wc.watchDir) continue;
+
+            const watchPath = path.resolve(projectRoot, wc.watchDir);
+            const webuiTargetDir = wc.targetDir || 'webui';
+
+            if (!fs.existsSync(watchPath)) {
+                logErr(`WebUI watchDir 不存在: ${watchPath}`);
+                continue;
+            }
+
+            try {
+                const watcher = fs.watch(watchPath, { recursive: true }, (_event, filename) => {
+                    if (!filename) return;
+                    // 忽略 node_modules、dist 等目录
+                    const normalized = filename.replace(/\\/g, '/');
+                    if (
+                        normalized.includes('node_modules') ||
+                        normalized.includes('/dist/') ||
+                        normalized.startsWith('dist/') ||
+                        normalized.startsWith('.')
+                    ) return;
+
+                    // 防抖：快速连续变化只触发一次
+                    if (webuiDeployDebounceTimer) clearTimeout(webuiDeployDebounceTimer);
+                    webuiDeployDebounceTimer = setTimeout(() => {
+                        log(`WebUI 文件变化: ${co(normalized, C.dim)}`);
+                        deployWebuiOnly().catch((e) => logErr(`WebUI 部署出错: ${e.message}`));
+                    }, 300);
+                });
+
+                webuiWatchers.push(watcher);
+                logOk(`监听 WebUI (${webuiTargetDir}): ${co(watchPath, C.dim)}`);
+            } catch (e: any) {
+                logErr(`无法监听 WebUI 目录: ${e.message}`);
+            }
+        }
+    }
+
     return {
         name: 'napcat-hmr',
         apply: 'build',
@@ -404,11 +543,27 @@ export function napcatHmrPlugin(options: NapcatHmrPluginOptions = {}): Plugin {
             }
 
             await deployAndReload(distDir);
+
+            // 首次构建完成后，在 watch 模式下启动 WebUI 文件监听
+            if (isFirstBuild && config.build.watch && webuiConfigs.some(wc => wc.watchDir)) {
+                const projectRoot = config.root || process.cwd();
+                startWebuiWatchers(projectRoot);
+            }
             isFirstBuild = false;
         },
 
         closeBundle() {
-            // watch 模式下不关闭连接（Vite 会持续运行）
+            // 清理 WebUI 文件监听
+            for (const w of webuiWatchers) {
+                try { w.close(); } catch { /* */ }
+            }
+            webuiWatchers.length = 0;
+            if (webuiDeployDebounceTimer) {
+                clearTimeout(webuiDeployDebounceTimer);
+                webuiDeployDebounceTimer = null;
+            }
+
+            // watch 模式下不关闭 WS 连接（Vite 会持续运行）
             if (config.build.watch) return;
             rpc?.close();
             rpc = null;

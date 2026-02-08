@@ -96,6 +96,8 @@ function napcatHmrPlugin(options = {}) {
   let connecting = false;
   let config;
   let isFirstBuild = true;
+  const webuiWatchers = [];
+  let webuiDeployDebounceTimer = null;
   async function connect() {
     if (rpc?.connected) return true;
     if (connecting) return false;
@@ -237,6 +239,98 @@ function napcatHmrPlugin(options = {}) {
       }
     }
   }
+  async function deployWebuiOnly() {
+    if (!rpc?.connected || !remotePluginPath) {
+      logErr("未连接到调试服务，跳过 WebUI 部署");
+      return;
+    }
+    const distDir = path.resolve(config.build.outDir);
+    const pkgPath = path.join(distDir, "package.json");
+    if (!fs.existsSync(pkgPath)) {
+      logErr("dist/package.json 不存在，跳过 WebUI 部署");
+      return;
+    }
+    let pluginName;
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+      pluginName = pkg.name;
+      if (!pluginName) return;
+    } catch {
+      return;
+    }
+    const destDir = path.join(remotePluginPath, pluginName);
+    const projectRoot = config.root || process.cwd();
+    let hasChanges = false;
+    for (const wc of webuiConfigs) {
+      const webuiTargetDir = wc.targetDir || "webui";
+      const webuiDistDir = path.resolve(projectRoot, wc.distDir);
+      const webuiRoot = wc.root ? path.resolve(projectRoot, wc.root) : path.dirname(webuiDistDir);
+      if (wc.buildCommand) {
+        try {
+          log(`构建 WebUI (${co(webuiTargetDir, C.cyan)})...`);
+          execSync(wc.buildCommand, {
+            cwd: webuiRoot,
+            stdio: "pipe",
+            env: { ...process.env, NODE_ENV: "production" }
+          });
+          logOk(`WebUI (${webuiTargetDir}) 构建完成`);
+        } catch (e) {
+          logErr(`WebUI (${webuiTargetDir}) 构建失败: ${e.stderr?.toString() || e.message}`);
+          continue;
+        }
+      }
+      if (!fs.existsSync(webuiDistDir)) {
+        logErr(`WebUI 产物目录不存在: ${webuiDistDir}`);
+        continue;
+      }
+      try {
+        const webuiDestDir = path.join(destDir, webuiTargetDir);
+        if (fs.existsSync(webuiDestDir)) {
+          fs.rmSync(webuiDestDir, { recursive: true, force: true });
+        }
+        copyDirRecursive(webuiDistDir, webuiDestDir);
+        logOk(`WebUI (${webuiTargetDir}) 已部署 (${countFiles(webuiDistDir)} 个文件)`);
+        hasChanges = true;
+      } catch (e) {
+        logErr(`WebUI (${webuiTargetDir}) 部署失败: ${e.message}`);
+      }
+    }
+    if (hasChanges) {
+      try {
+        await rpc.call("reloadPlugin", pluginName);
+        logHmr(`${co(pluginName, C.green, C.bold)} 已重载 (WebUI 更新)`);
+      } catch (e) {
+        logErr(`重载失败: ${e.message}`);
+      }
+    }
+  }
+  function startWebuiWatchers(projectRoot) {
+    for (const wc of webuiConfigs) {
+      if (!wc.watchDir) continue;
+      const watchPath = path.resolve(projectRoot, wc.watchDir);
+      const webuiTargetDir = wc.targetDir || "webui";
+      if (!fs.existsSync(watchPath)) {
+        logErr(`WebUI watchDir 不存在: ${watchPath}`);
+        continue;
+      }
+      try {
+        const watcher = fs.watch(watchPath, { recursive: true }, (_event, filename) => {
+          if (!filename) return;
+          const normalized = filename.replace(/\\/g, "/");
+          if (normalized.includes("node_modules") || normalized.includes("/dist/") || normalized.startsWith("dist/") || normalized.startsWith(".")) return;
+          if (webuiDeployDebounceTimer) clearTimeout(webuiDeployDebounceTimer);
+          webuiDeployDebounceTimer = setTimeout(() => {
+            log(`WebUI 文件变化: ${co(normalized, C.dim)}`);
+            deployWebuiOnly().catch((e) => logErr(`WebUI 部署出错: ${e.message}`));
+          }, 300);
+        });
+        webuiWatchers.push(watcher);
+        logOk(`监听 WebUI (${webuiTargetDir}): ${co(watchPath, C.dim)}`);
+      } catch (e) {
+        logErr(`无法监听 WebUI 目录: ${e.message}`);
+      }
+    }
+  }
   return {
     name: "napcat-hmr",
     apply: "build",
@@ -264,9 +358,24 @@ function napcatHmrPlugin(options = {}) {
         if (!ok) return;
       }
       await deployAndReload(distDir);
+      if (isFirstBuild && config.build.watch && webuiConfigs.some((wc) => wc.watchDir)) {
+        const projectRoot = config.root || process.cwd();
+        startWebuiWatchers(projectRoot);
+      }
       isFirstBuild = false;
     },
     closeBundle() {
+      for (const w of webuiWatchers) {
+        try {
+          w.close();
+        } catch {
+        }
+      }
+      webuiWatchers.length = 0;
+      if (webuiDeployDebounceTimer) {
+        clearTimeout(webuiDeployDebounceTimer);
+        webuiDeployDebounceTimer = null;
+      }
       if (config.build.watch) return;
       rpc?.close();
       rpc = null;
