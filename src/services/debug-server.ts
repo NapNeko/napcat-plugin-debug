@@ -15,12 +15,12 @@ export class DebugServer {
   private ctx: NapCatPluginContext;
   private config: DebugPluginConfig;
 
-  constructor (ctx: NapCatPluginContext, config: DebugPluginConfig) {
+  constructor(ctx: NapCatPluginContext, config: DebugPluginConfig) {
     this.ctx = ctx;
     this.config = config;
   }
 
-  async start (): Promise<void> {
+  async start(): Promise<void> {
     // ws 在 NapCat 运行环境中可用（NapCat 的根 dependencies 包含 ws）
     const { WebSocketServer } = await import('ws');
 
@@ -82,7 +82,7 @@ export class DebugServer {
     this.ctx.logger.info(`调试服务已启动: ws://${this.config.host}:${this.config.port}`);
   }
 
-  async stop (): Promise<void> {
+  async stop(): Promise<void> {
     if (!this.wss) return;
     for (const c of this.clients) {
       try { c.close(1000, 'Server stopping'); } catch { /* */ }
@@ -93,7 +93,7 @@ export class DebugServer {
     this.ctx.logger.info('调试服务已停止');
   }
 
-  broadcastEvent (event: unknown): void {
+  broadcastEvent(event: unknown): void {
     const msg = JSON.stringify({
       jsonrpc: '2.0',
       method: 'event',
@@ -106,7 +106,7 @@ export class DebugServer {
 
   // ==================== JSON-RPC 方法路由 ====================
 
-  private async handleRpc (req: RpcRequest): Promise<RpcResponse> {
+  private async handleRpc(req: RpcRequest): Promise<RpcResponse> {
     const pm = this.ctx.pluginManager;
     const params = req.params || [];
 
@@ -165,6 +165,10 @@ export class DebugServer {
           result = await pm.reloadPlugin(params[0] as string);
           break;
 
+        case 'scanPlugins':
+          result = await pm.scanPlugins();
+          break;
+
         case 'loadDirectoryPlugin':
           await pm.loadDirectoryPlugin(params[0] as string);
           result = true;
@@ -203,7 +207,7 @@ export class DebugServer {
     }
   }
 
-  private serializeEntry (e: any): RemotePluginInfo {
+  private serializeEntry(e: any): RemotePluginInfo {
     return {
       id: e.id,
       fileId: e.fileId,

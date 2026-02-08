@@ -53,9 +53,10 @@ interface CliOptions {
   watch?: string;
   watchAll: boolean;
   verbose: boolean;
+  deploy?: string;
 }
 
-function parseArgs (): CliOptions {
+function parseArgs(): CliOptions {
   const args = process.argv.slice(2);
   const opts: CliOptions = { wsUrl: 'ws://127.0.0.1:8998', watchAll: false, verbose: false };
 
@@ -66,12 +67,13 @@ function parseArgs (): CliOptions {
     else if (arg === '--watch' || arg === '-w') { opts.watch = args[++i]; }
     else if (arg === '--watch-all' || arg === '-W') { opts.watchAll = true; }
     else if (arg === '--verbose' || arg === '-v') { opts.verbose = true; }
+    else if (arg === '--deploy' || arg === '-d') { opts.deploy = args[++i] || '.'; }
     else if (arg.startsWith('ws://') || arg.startsWith('wss://')) { opts.wsUrl = arg; }
   }
   return opts;
 }
 
-function printHelp (): void {
+function printHelp(): void {
   console.log(`
 napcat-plugin-debug CLI — NapCat 插件调试 & 热重载
 
@@ -82,6 +84,7 @@ napcat-plugin-debug CLI — NapCat 插件调试 & 热重载
   -t, --token <token>  认证 token
   -w, --watch <dir>    监听目录自动热重载
   -W, --watch-all      监听远程插件目录所有插件
+  -d, --deploy [dir]   部署插件 dist/ 到远程插件目录并重载 (默认: .)
   -v, --verbose        详细输出
   -h, --help           帮助
 
@@ -91,6 +94,7 @@ napcat-plugin-debug CLI — NapCat 插件调试 & 热重载
   load <id>            加载插件
   unload <id>          卸载插件
   info <id>            插件详情
+  deploy [dir]         部署插件到远程并重载
   watch <dir>          开始监听
   unwatch              停止监听
   status               服务状态
@@ -123,7 +127,7 @@ class RpcClient {
   private nextId = 1;
   private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; }>();
 
-  constructor (ws: WebSocket) {
+  constructor(ws: WebSocket) {
     this.ws = ws;
     ws.on('message', (raw: Buffer) => {
       try {
@@ -140,7 +144,7 @@ class RpcClient {
     });
   }
 
-  call (method: string, ...params: unknown[]): Promise<any> {
+  call(method: string, ...params: unknown[]): Promise<any> {
     return new Promise((resolve, reject) => {
       const id = this.nextId++;
       this.pending.set(id, { resolve, reject });
@@ -159,7 +163,7 @@ class RpcClient {
 
 // ======================== 文件监听 ========================
 
-function createWatcher (
+function createWatcher(
   watchPath: string,
   onPluginChange: (dirName: string, filePath: string) => void,
 ) {
@@ -168,7 +172,7 @@ function createWatcher (
   let active = false;
   const EXTS = new Set(['.js', '.mjs', '.cjs', '.ts', '.mts', '.json']);
 
-  function watchDir (name: string, dirPath: string) {
+  function watchDir(name: string, dirPath: string) {
     try {
       const w = fs.watch(dirPath, { recursive: true, persistent: false }, (_ev, file) => {
         if (!file) return;
@@ -186,9 +190,9 @@ function createWatcher (
   }
 
   return {
-    get isActive () { return active; },
-    get path () { return watchPath; },
-    start () {
+    get isActive() { return active; },
+    get path() { return watchPath; },
+    start() {
       if (active) return;
       if (!fs.existsSync(watchPath)) { logErr(`目录不存在: ${watchPath}`); return; }
       active = true;
@@ -205,7 +209,7 @@ function createWatcher (
         logHmr(`监听 ${watchers.size} 个插件: ${watchPath}`);
       }
     },
-    stop () {
+    stop() {
       if (!active) return;
       active = false;
       for (const t of timers.values()) clearTimeout(t);
@@ -217,9 +221,106 @@ function createWatcher (
   };
 }
 
+// ======================== 部署逻辑 ========================
+
+/**
+ * 递归复制目录
+ */
+function copyDirRecursive(src: string, dest: string) {
+  if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) copyDirRecursive(srcPath, destPath);
+    else fs.copyFileSync(srcPath, destPath);
+  }
+}
+
+/**
+ * 递归统计目录中的文件数量
+ */
+function countFiles(dir: string): number {
+  let count = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) count += countFiles(path.join(dir, entry.name));
+    else count++;
+  }
+  return count;
+}
+
+/**
+ * 部署插件到远程插件目录：
+ * 1. 读取本地 dist/package.json 获取插件名
+ * 2. 复制 dist/ 到 <remotePluginPath>/<pluginName>/
+ * 3. 调用 RPC 重载插件
+ */
+async function deployPlugin(
+  projectDir: string,
+  remotePluginPath: string,
+  rpc: RpcClient,
+): Promise<boolean> {
+  const distDir = path.resolve(projectDir, 'dist');
+  if (!fs.existsSync(distDir)) {
+    logErr(`dist/ 目录不存在: ${distDir}`);
+    logInfo('请先运行 pnpm run build 构建插件');
+    return false;
+  }
+
+  const distPkgPath = path.join(distDir, 'package.json');
+  if (!fs.existsSync(distPkgPath)) {
+    logErr('dist/package.json 不存在，无法确定插件名称');
+    return false;
+  }
+
+  let pluginName: string;
+  try {
+    const pkg = JSON.parse(fs.readFileSync(distPkgPath, 'utf-8'));
+    pluginName = pkg.name;
+    if (!pluginName) {
+      logErr('dist/package.json 中缺少 name 字段');
+      return false;
+    }
+  } catch (e: any) {
+    logErr(`解析 dist/package.json 失败: ${e.message}`);
+    return false;
+  }
+
+  const destDir = path.join(remotePluginPath, pluginName);
+  logInfo(`部署 ${co(pluginName, C.bold, C.cyan)} → ${co(destDir, C.dim)}`);
+
+  try {
+    // 清空目标目录后复制
+    if (fs.existsSync(destDir)) {
+      fs.rmSync(destDir, { recursive: true, force: true });
+    }
+    copyDirRecursive(distDir, destDir);
+    logOk(`文件复制完成 (${countFiles(distDir)} 个文件)`);
+  } catch (e: any) {
+    logErr(`复制文件失败: ${e.message}`);
+    return false;
+  }
+
+  // 尝试重载插件
+  try {
+    await rpc.call('reloadPlugin', pluginName);
+    logOk(`${co(pluginName, C.green, C.bold)} 重载成功`);
+  } catch {
+    // 插件可能尚未加载过，尝试直接从目录加载
+    try {
+      logInfo('插件未注册，尝试从目录加载...');
+      await rpc.call('loadDirectoryPlugin', destDir);
+      logOk(`${co(pluginName, C.green, C.bold)} 首次加载成功`);
+    } catch (e2: any) {
+      logWarn(`自动加载失败: ${e2.message}，请手动 load ${pluginName}`);
+    }
+  }
+
+  return true;
+}
+
 // ======================== 主逻辑 ========================
 
-async function main () {
+async function main() {
   const opts = parseArgs();
 
   console.log(co('\n  napcat-plugin-debug CLI', C.bold, C.cyan));
@@ -240,7 +341,7 @@ async function main () {
   let remotePluginPath: string | null = null;
   const dirToId = new Map<string, string>();
 
-  async function refreshMap () {
+  async function refreshMap() {
     if (!rpc) return;
     try {
       const plugins: RemotePluginInfo[] = await rpc.call('getAllPlugins');
@@ -249,7 +350,7 @@ async function main () {
     } catch { /* */ }
   }
 
-  async function onFileChange (dirName: string, filePath: string) {
+  async function onFileChange(dirName: string, filePath: string) {
     if (!rpc) return;
     await refreshMap();
     const id = dirToId.get(dirName) ?? dirName;
@@ -276,6 +377,13 @@ async function main () {
           logInfo(`远程插件目录: ${co(info.pluginPath, C.dim)}`);
           logInfo(`插件: ${info.loadedCount}/${info.pluginCount} 已加载`);
         } catch (e: any) { logWarn(`获取信息失败: ${e.message}`); }
+
+        // --deploy 模式：部署后退出
+        if (opts.deploy && remotePluginPath && rpc) {
+          const ok = await deployPlugin(path.resolve(opts.deploy), remotePluginPath, rpc);
+          ws.close(1000);
+          process.exit(ok ? 0 : 1);
+        }
 
         // 启动文件监听
         if (opts.watch) {
@@ -313,7 +421,7 @@ async function main () {
 
 // ======================== REPL 交互 ========================
 
-function startRepl (
+function startRepl(
   rpc: RpcClient,
   watcher: ReturnType<typeof createWatcher> | null,
   remotePath: string | null,
@@ -368,6 +476,12 @@ function startRepl (
           const i = await rpc.call('getPluginInfo', args[0]);
           if (!i) { logErr('插件不存在'); break; }
           console.log(`\n  ID:      ${i.id}\n  名称:    ${i.name || '-'}\n  版本:    ${i.version || '-'}\n  路径:    ${i.pluginPath}\n  启用:    ${i.enable}\n  已加载:  ${i.loaded}\n  状态:    ${i.runtimeStatus}\n`);
+          break;
+        }
+        case 'deploy': {
+          if (!remotePath) { logErr('远程插件目录未知，无法部署'); break; }
+          const dir = args[0] || '.';
+          await deployPlugin(path.resolve(dir), remotePath, rpc);
           break;
         }
         case 'watch': {

@@ -5053,6 +5053,8 @@ function parseArgs() {
       opts.watchAll = true;
     } else if (arg === "--verbose" || arg === "-v") {
       opts.verbose = true;
+    } else if (arg === "--deploy" || arg === "-d") {
+      opts.deploy = args[++i] || ".";
     } else if (arg.startsWith("ws://") || arg.startsWith("wss://")) {
       opts.wsUrl = arg;
     }
@@ -5070,6 +5072,7 @@ napcat-plugin-debug CLI — NapCat 插件调试 & 热重载
   -t, --token <token>  认证 token
   -w, --watch <dir>    监听目录自动热重载
   -W, --watch-all      监听远程插件目录所有插件
+  -d, --deploy [dir]   部署插件 dist/ 到远程插件目录并重载 (默认: .)
   -v, --verbose        详细输出
   -h, --help           帮助
 
@@ -5079,6 +5082,7 @@ napcat-plugin-debug CLI — NapCat 插件调试 & 热重载
   load <id>            加载插件
   unload <id>          卸载插件
   info <id>            插件详情
+  deploy [dir]         部署插件到远程并重载
   watch <dir>          开始监听
   unwatch              停止监听
   status               服务状态
@@ -5202,6 +5206,73 @@ function createWatcher(watchPath, onPluginChange) {
     }
   };
 }
+function copyDirRecursive(src, dest) {
+  if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) copyDirRecursive(srcPath, destPath);
+    else fs.copyFileSync(srcPath, destPath);
+  }
+}
+function countFiles(dir) {
+  let count = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) count += countFiles(path.join(dir, entry.name));
+    else count++;
+  }
+  return count;
+}
+async function deployPlugin(projectDir, remotePluginPath, rpc) {
+  const distDir = path.resolve(projectDir, "dist");
+  if (!fs.existsSync(distDir)) {
+    logErr(`dist/ 目录不存在: ${distDir}`);
+    logInfo("请先运行 pnpm run build 构建插件");
+    return false;
+  }
+  const distPkgPath = path.join(distDir, "package.json");
+  if (!fs.existsSync(distPkgPath)) {
+    logErr("dist/package.json 不存在，无法确定插件名称");
+    return false;
+  }
+  let pluginName;
+  try {
+    const pkg = JSON.parse(fs.readFileSync(distPkgPath, "utf-8"));
+    pluginName = pkg.name;
+    if (!pluginName) {
+      logErr("dist/package.json 中缺少 name 字段");
+      return false;
+    }
+  } catch (e) {
+    logErr(`解析 dist/package.json 失败: ${e.message}`);
+    return false;
+  }
+  const destDir = path.join(remotePluginPath, pluginName);
+  logInfo(`部署 ${co(pluginName, C.bold, C.cyan)} → ${co(destDir, C.dim)}`);
+  try {
+    if (fs.existsSync(destDir)) {
+      fs.rmSync(destDir, { recursive: true, force: true });
+    }
+    copyDirRecursive(distDir, destDir);
+    logOk(`文件复制完成 (${countFiles(distDir)} 个文件)`);
+  } catch (e) {
+    logErr(`复制文件失败: ${e.message}`);
+    return false;
+  }
+  try {
+    await rpc.call("reloadPlugin", pluginName);
+    logOk(`${co(pluginName, C.green, C.bold)} 重载成功`);
+  } catch {
+    try {
+      logInfo("插件未注册，尝试从目录加载...");
+      await rpc.call("loadDirectoryPlugin", destDir);
+      logOk(`${co(pluginName, C.green, C.bold)} 首次加载成功`);
+    } catch (e2) {
+      logWarn(`自动加载失败: ${e2.message}，请手动 load ${pluginName}`);
+    }
+  }
+  return true;
+}
 async function main() {
   const opts = parseArgs();
   console.log(co("\n  napcat-plugin-debug CLI", C.bold, C.cyan));
@@ -5253,6 +5324,11 @@ async function main() {
           logInfo(`插件: ${info.loadedCount}/${info.pluginCount} 已加载`);
         } catch (e) {
           logWarn(`获取信息失败: ${e.message}`);
+        }
+        if (opts.deploy && remotePluginPath && rpc) {
+          const ok = await deployPlugin(path.resolve(opts.deploy), remotePluginPath, rpc);
+          ws.close(1e3);
+          process.exit(ok ? 0 : 1);
         }
         if (opts.watch) {
           watcher = createWatcher(path.resolve(opts.watch), onFileChange);
@@ -5359,6 +5435,15 @@ function startRepl(rpc, watcher, remotePath, onFileChange) {
   已加载:  ${i.loaded}
   状态:    ${i.runtimeStatus}
 `);
+          break;
+        }
+        case "deploy": {
+          if (!remotePath) {
+            logErr("远程插件目录未知，无法部署");
+            break;
+          }
+          const dir = args[0] || ".";
+          await deployPlugin(path.resolve(dir), remotePath, rpc);
           break;
         }
         case "watch": {

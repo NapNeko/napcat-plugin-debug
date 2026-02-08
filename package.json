@@ -25,10 +25,10 @@
     "ws": "^8.18.3"
   },
   "scripts": {
-    "build": "vite build && vite build -c vite.cli.config.ts",
+    "build": "vite build && vite build -c vite.cli.config.ts && vite build -c vite.vite-plugin.config.ts",
     "build:plugin": "vite build",
-    "build:cli": "vite build -c vite.cli.config.ts",
-    "publish:cli": "vite build -c vite.cli.config.ts && cd cli && npm publish",
+    "build:cli": "vite build -c vite.cli.config.ts && vite build -c vite.vite-plugin.config.ts",
+    "publish:cli": "pnpm run build:cli && cd cli && npm publish",
     "watch": "vite build --watch",
     "typecheck": "tsc --noEmit"
   }
