@@ -196,9 +196,12 @@ function napcatHmrPlugin(options = {}) {
       if (wc.buildCommand) {
         try {
           log(`构建 WebUI (${co(webuiTargetDir, C.cyan)})...`);
+          const webuiEnv = { ...process.env };
+          delete webuiEnv.NODE_ENV;
           execSync(wc.buildCommand, {
             cwd: webuiRoot,
-            stdio: "pipe"
+            stdio: "pipe",
+            env: webuiEnv
           });
           logOk(`WebUI (${webuiTargetDir}) 构建完成`);
         } catch (e) {
@@ -267,9 +270,12 @@ function napcatHmrPlugin(options = {}) {
       if (wc.buildCommand) {
         try {
           log(`构建 WebUI (${co(webuiTargetDir, C.cyan)})...`);
+          const webuiEnv = { ...process.env };
+          delete webuiEnv.NODE_ENV;
           execSync(wc.buildCommand, {
             cwd: webuiRoot,
-            stdio: "pipe"
+            stdio: "pipe",
+            env: webuiEnv
           });
           logOk(`WebUI (${webuiTargetDir}) 构建完成`);
         } catch (e) {

@@ -333,9 +333,13 @@ export function napcatHmrPlugin(options: NapcatHmrPluginOptions = {}): Plugin {
             if (wc.buildCommand) {
                 try {
                     log(`构建 WebUI (${co(webuiTargetDir, C.cyan)})...`);
+                    // 删除 NODE_ENV 避免 Vite build 模式继承的 production 导致 pnpm install 跳过 devDependencies
+                    const webuiEnv = { ...process.env };
+                    delete webuiEnv.NODE_ENV;
                     execSync(wc.buildCommand, {
                         cwd: webuiRoot,
                         stdio: 'pipe',
+                        env: webuiEnv,
                     });
                     logOk(`WebUI (${webuiTargetDir}) 构建完成`);
                 } catch (e: any) {
@@ -421,9 +425,13 @@ export function napcatHmrPlugin(options: NapcatHmrPluginOptions = {}): Plugin {
             if (wc.buildCommand) {
                 try {
                     log(`构建 WebUI (${co(webuiTargetDir, C.cyan)})...`);
+                    // 删除 NODE_ENV 避免 Vite build 模式继承的 production 导致 pnpm install 跳过 devDependencies
+                    const webuiEnv = { ...process.env };
+                    delete webuiEnv.NODE_ENV;
                     execSync(wc.buildCommand, {
                         cwd: webuiRoot,
                         stdio: 'pipe',
+                        env: webuiEnv,
                     });
                     logOk(`WebUI (${webuiTargetDir}) 构建完成`);
                 } catch (e: any) {
