@@ -150,13 +150,13 @@ class RpcClient {
       this.pending.set(id, { resolve, reject });
       const req: RpcRequest = { jsonrpc: '2.0', id, method, params };
       this.ws.send(JSON.stringify(req));
-      // 10s 超时
+      // 30s 超时
       setTimeout(() => {
         if (this.pending.has(id)) {
           this.pending.delete(id);
           reject(new Error('RPC timeout'));
         }
-      }, 10000);
+      }, 30000);
     });
   }
 }
@@ -241,16 +241,25 @@ function createWatcher(
 // ======================== 部署逻辑 ========================
 
 /**
- * 递归复制目录
+ * 遍历本地目录，收集所有文件为 { path, content, encoding } 数组（base64 编码）
  */
-function copyDirRecursive(src: string, dest: string) {
-  if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    const srcPath = path.join(src, entry.name);
-    const destPath = path.join(dest, entry.name);
-    if (entry.isDirectory()) copyDirRecursive(srcPath, destPath);
-    else fs.copyFileSync(srcPath, destPath);
+function collectFiles(dir: string, prefix: string = ''): Array<{ path: string; content: string; encoding: string }> {
+  const files: Array<{ path: string; content: string; encoding: string }> = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    // 使用 posix 路径分隔符，确保远程 Linux 兼容
+    const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectFiles(fullPath, relPath));
+    } else {
+      files.push({
+        path: relPath,
+        content: fs.readFileSync(fullPath).toString('base64'),
+        encoding: 'base64',
+      });
+    }
   }
+  return files;
 }
 
 /**
@@ -302,18 +311,18 @@ async function deployPlugin(
     return false;
   }
 
-  const destDir = path.join(remotePluginPath, pluginName);
-  logInfo(`部署 ${co(pluginName, C.bold, C.cyan)} → ${co(destDir, C.dim)}`);
+  const destDir = `${pluginName}`;
+  logInfo(`部署 ${co(pluginName, C.bold, C.cyan)} → 远程插件目录`);
 
   try {
-    // 清空目标目录后复制
-    if (fs.existsSync(destDir)) {
-      fs.rmSync(destDir, { recursive: true, force: true });
-    }
-    copyDirRecursive(distDir, destDir);
-    logOk(`文件复制完成 (${countFiles(distDir)} 个文件)`);
+    // 通过 RPC 清理远程插件目录
+    await rpc.call('removeDir', pluginName);
+    // 收集本地文件并通过 RPC 传输
+    const files = collectFiles(distDir, pluginName);
+    await rpc.call('writeFiles', files);
+    logOk(`文件传输完成 (${countFiles(distDir)} 个文件)`);
   } catch (e: any) {
-    logErr(`复制文件失败: ${e.message}`);
+    logErr(`部署失败: ${e.message}`);
     return false;
   }
 

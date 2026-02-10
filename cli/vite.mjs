@@ -52,7 +52,7 @@ class SimpleRpcClient {
           this.pending.delete(id);
           reject(new Error("RPC timeout"));
         }
-      }, 1e4);
+      }, 3e4);
     });
   }
   get connected() {
@@ -65,15 +65,6 @@ class SimpleRpcClient {
     }
   }
 }
-function copyDirRecursive(src, dest) {
-  if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    const srcPath = path.join(src, entry.name);
-    const destPath = path.join(dest, entry.name);
-    if (entry.isDirectory()) copyDirRecursive(srcPath, destPath);
-    else fs.copyFileSync(srcPath, destPath);
-  }
-}
 function countFiles(dir) {
   let count = 0;
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -81,6 +72,23 @@ function countFiles(dir) {
     else count++;
   }
   return count;
+}
+function collectFiles(dir, prefix = "") {
+  const files = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectFiles(fullPath, relPath));
+    } else {
+      files.push({
+        path: relPath,
+        content: fs.readFileSync(fullPath).toString("base64"),
+        encoding: "base64"
+      });
+    }
+  }
+  return files;
 }
 function napcatHmrPlugin(options = {}) {
   const {
@@ -178,14 +186,17 @@ function napcatHmrPlugin(options = {}) {
       logErr("解析 dist/package.json 失败");
       return;
     }
-    const destDir = path.join(remotePluginPath, pluginName);
     try {
-      if (fs.existsSync(destDir)) {
-        fs.rmSync(destDir, { recursive: true, force: true });
-      }
-      copyDirRecursive(distDir, destDir);
+      await rpc.call("removeDir", pluginName);
     } catch (e) {
-      logErr(`复制文件失败: ${e.message}`);
+      logErr(`清理远程目录失败: ${e.message}`);
+      return;
+    }
+    try {
+      const files = collectFiles(distDir, pluginName);
+      await rpc.call("writeFiles", files);
+    } catch (e) {
+      logErr(`传输文件失败: ${e.message}`);
       return;
     }
     const projectRoot = config.root || process.cwd();
@@ -214,8 +225,8 @@ function napcatHmrPlugin(options = {}) {
         continue;
       }
       try {
-        const webuiDestDir = path.join(destDir, webuiTargetDir);
-        copyDirRecursive(webuiDistDir, webuiDestDir);
+        const webuiFiles = collectFiles(webuiDistDir, `${pluginName}/${webuiTargetDir}`);
+        await rpc.call("writeFiles", webuiFiles);
         logOk(`WebUI (${webuiTargetDir}) 已部署 (${countFiles(webuiDistDir)} 个文件)`);
       } catch (e) {
         logErr(`WebUI (${webuiTargetDir}) 部署失败: ${e.message}`);
@@ -260,7 +271,6 @@ function napcatHmrPlugin(options = {}) {
     } catch {
       return;
     }
-    const destDir = path.join(remotePluginPath, pluginName);
     const projectRoot = config.root || process.cwd();
     let hasChanges = false;
     for (const wc of webuiConfigs) {
@@ -288,11 +298,9 @@ function napcatHmrPlugin(options = {}) {
         continue;
       }
       try {
-        const webuiDestDir = path.join(destDir, webuiTargetDir);
-        if (fs.existsSync(webuiDestDir)) {
-          fs.rmSync(webuiDestDir, { recursive: true, force: true });
-        }
-        copyDirRecursive(webuiDistDir, webuiDestDir);
+        await rpc.call("removeDir", `${pluginName}/${webuiTargetDir}`);
+        const webuiFiles = collectFiles(webuiDistDir, `${pluginName}/${webuiTargetDir}`);
+        await rpc.call("writeFiles", webuiFiles);
         logOk(`WebUI (${webuiTargetDir}) 已部署 (${countFiles(webuiDistDir)} 个文件)`);
         hasChanges = true;
       } catch (e) {

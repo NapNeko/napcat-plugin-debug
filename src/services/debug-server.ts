@@ -222,6 +222,56 @@ export class DebugServer {
           result = pm.getPluginConfig();
           break;
 
+        // ==================== 远程文件传输 ====================
+
+        case 'writeFiles': {
+          // params: [{ path: string, content: string, encoding?: 'base64' | 'utf-8' }[]]
+          const files = params[0] as Array<{ path: string; content: string; encoding?: string }>;
+          if (!Array.isArray(files)) {
+            return { jsonrpc: '2.0', id: req.id, error: { code: -32602, message: 'params[0] must be an array of file entries' } };
+          }
+          const pluginPath = pm.getPluginPath();
+          let written = 0;
+          for (const f of files) {
+            // 安全检查：只允许写入插件目录下
+            const fs = await import('fs');
+            const nodePath = await import('path');
+            const targetPath = nodePath.resolve(nodePath.join(pluginPath, f.path));
+            if (!targetPath.startsWith(pluginPath)) {
+              return { jsonrpc: '2.0', id: req.id, error: { code: -32001, message: `路径越界: ${f.path}` } };
+            }
+            const dir = nodePath.dirname(targetPath);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            const buf = f.encoding === 'base64'
+              ? Buffer.from(f.content, 'base64')
+              : f.content;
+            fs.writeFileSync(targetPath, buf);
+            written++;
+          }
+          result = { written };
+          break;
+        }
+
+        case 'removeDir': {
+          // params: [relativePath: string]
+          const relPath = params[0] as string;
+          if (!relPath || typeof relPath !== 'string') {
+            return { jsonrpc: '2.0', id: req.id, error: { code: -32602, message: 'params[0] must be a relative path string' } };
+          }
+          const fs = await import('fs');
+          const nodePath = await import('path');
+          const pluginPath2 = pm.getPluginPath();
+          const targetDir = nodePath.resolve(nodePath.join(pluginPath2, relPath));
+          if (!targetDir.startsWith(pluginPath2)) {
+            return { jsonrpc: '2.0', id: req.id, error: { code: -32001, message: `路径越界: ${relPath}` } };
+          }
+          if (fs.existsSync(targetDir)) {
+            fs.rmSync(targetDir, { recursive: true, force: true });
+          }
+          result = true;
+          break;
+        }
+
         default:
           return {
             jsonrpc: '2.0', id: req.id,

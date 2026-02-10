@@ -5141,7 +5141,7 @@ class RpcClient {
           this.pending.delete(id);
           reject(new Error("RPC timeout"));
         }
-      }, 1e4);
+      }, 3e4);
     });
   }
 }
@@ -5242,14 +5242,22 @@ function createWatcher(watchPath, onPluginChange) {
     }
   };
 }
-function copyDirRecursive(src, dest) {
-  if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    const srcPath = path.join(src, entry.name);
-    const destPath = path.join(dest, entry.name);
-    if (entry.isDirectory()) copyDirRecursive(srcPath, destPath);
-    else fs.copyFileSync(srcPath, destPath);
+function collectFiles(dir, prefix = "") {
+  const files = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectFiles(fullPath, relPath));
+    } else {
+      files.push({
+        path: relPath,
+        content: fs.readFileSync(fullPath).toString("base64"),
+        encoding: "base64"
+      });
+    }
   }
+  return files;
 }
 function countFiles(dir) {
   let count = 0;
@@ -5283,16 +5291,14 @@ async function deployPlugin(projectDir, remotePluginPath, rpc) {
     logErr(`解析 dist/package.json 失败: ${e.message}`);
     return false;
   }
-  const destDir = path.join(remotePluginPath, pluginName);
-  logInfo(`部署 ${co(pluginName, C.bold, C.cyan)} → ${co(destDir, C.dim)}`);
+  logInfo(`部署 ${co(pluginName, C.bold, C.cyan)} → 远程插件目录`);
   try {
-    if (fs.existsSync(destDir)) {
-      fs.rmSync(destDir, { recursive: true, force: true });
-    }
-    copyDirRecursive(distDir, destDir);
-    logOk(`文件复制完成 (${countFiles(distDir)} 个文件)`);
+    await rpc.call("removeDir", pluginName);
+    const files = collectFiles(distDir, pluginName);
+    await rpc.call("writeFiles", files);
+    logOk(`文件传输完成 (${countFiles(distDir)} 个文件)`);
   } catch (e) {
-    logErr(`复制文件失败: ${e.message}`);
+    logErr(`部署失败: ${e.message}`);
     return false;
   }
   try {
