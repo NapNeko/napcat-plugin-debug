@@ -5242,6 +5242,15 @@ function createWatcher(watchPath, onPluginChange) {
     }
   };
 }
+function copyDirRecursive(src, dest) {
+  if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) copyDirRecursive(srcPath, destPath);
+    else fs.copyFileSync(srcPath, destPath);
+  }
+}
 function collectFiles(dir, prefix = "") {
   const files = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -5267,7 +5276,7 @@ function countFiles(dir) {
   }
   return count;
 }
-async function deployPlugin(projectDir, remotePluginPath, rpc) {
+async function deployPlugin(projectDir, remotePluginPath, rpc, supportsRemoteTransfer) {
   const distDir = path.resolve(projectDir, "dist");
   if (!fs.existsSync(distDir)) {
     logErr(`dist/ 目录不存在: ${distDir}`);
@@ -5293,30 +5302,42 @@ async function deployPlugin(projectDir, remotePluginPath, rpc) {
   }
   logInfo(`部署 ${co(pluginName, C.bold, C.cyan)} → 远程插件目录`);
   try {
-    await rpc.call("removeDir", pluginName);
-    const files = collectFiles(distDir, pluginName);
-    await rpc.call("writeFiles", files);
-    logOk(`文件传输完成 (${countFiles(distDir)} 个文件)`);
+    if (supportsRemoteTransfer) {
+      await rpc.call("removeDir", pluginName);
+      const files = collectFiles(distDir, pluginName);
+      await rpc.call("writeFiles", files);
+    } else {
+      const destPath = path.join(remotePluginPath, pluginName);
+      if (fs.existsSync(destPath)) {
+        fs.rmSync(destPath, { recursive: true, force: true });
+      }
+      copyDirRecursive(distDir, destPath);
+    }
+    logOk(`文件部署完成 (${countFiles(distDir)} 个文件)`);
   } catch (e) {
     logErr(`部署失败: ${e.message}`);
     return false;
   }
   try {
-    await rpc.call("reloadPlugin", pluginName);
-    logOk(`${co(pluginName, C.green, C.bold)} 重载成功`);
-  } catch {
-    try {
-      logInfo("插件未注册，尝试从目录加载...");
-      await rpc.call("loadDirectoryPlugin", pluginName);
+    const ok = await rpc.call("reloadPlugin", pluginName);
+    if (ok) {
+      logOk(`${co(pluginName, C.green, C.bold)} 重载成功`);
+    } else {
+      logInfo("插件未注册或重载失败，尝试从目录加载...");
       try {
-        await rpc.call("setPluginStatus", pluginName, true);
-        await rpc.call("loadPluginById", pluginName);
-      } catch {
+        await rpc.call("loadDirectoryPlugin", pluginName);
+        try {
+          await rpc.call("setPluginStatus", pluginName, true);
+          await rpc.call("loadPluginById", pluginName);
+        } catch {
+        }
+        logOk(`${co(pluginName, C.green, C.bold)} 首次加载成功`);
+      } catch (e2) {
+        logWarn(`自动加载失败: ${e2.message}，请手动 load ${pluginName}`);
       }
-      logOk(`${co(pluginName, C.green, C.bold)} 首次加载成功`);
-    } catch (e2) {
-      logWarn(`自动加载失败: ${e2.message}，请手动 load ${pluginName}`);
     }
+  } catch (e) {
+    logErr(`重载失败: ${e.message}`);
   }
   return true;
 }
@@ -5335,6 +5356,7 @@ async function main() {
   let rpc = null;
   let watcher = null;
   let remotePluginPath = null;
+  let supportsRemoteTransfer = false;
   const dirToId = /* @__PURE__ */ new Map();
   async function refreshMap() {
     if (!rpc) return;
@@ -5372,8 +5394,14 @@ async function main() {
         } catch (e) {
           logWarn(`获取信息失败: ${e.message}`);
         }
+        try {
+          await rpc.call("removeDir", "__probe_nonexistent__");
+          supportsRemoteTransfer = true;
+        } catch {
+          supportsRemoteTransfer = false;
+        }
         if (opts.deploy && remotePluginPath && rpc) {
-          const ok = await deployPlugin(path.resolve(opts.deploy), remotePluginPath, rpc);
+          const ok = await deployPlugin(path.resolve(opts.deploy), remotePluginPath, rpc, supportsRemoteTransfer);
           ws.close(1e3);
           process.exit(ok ? 0 : 1);
         }
@@ -5384,7 +5412,7 @@ async function main() {
           watcher = createWatcher(remotePluginPath, onFileChange);
           watcher.start();
         }
-        startRepl(rpc, watcher, remotePluginPath, onFileChange);
+        startRepl(rpc, watcher, remotePluginPath, onFileChange, supportsRemoteTransfer);
       }
       if (msg.method === "event" && opts.verbose) {
         logInfo(`事件: ${JSON.stringify(msg.params).substring(0, 100)}`);
@@ -5405,7 +5433,7 @@ async function main() {
     process.exit(0);
   });
 }
-function startRepl(rpc, watcher, remotePath, onFileChange) {
+function startRepl(rpc, watcher, remotePath, onFileChange, supportsRemoteTransfer) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: co("debug> ", C.cyan) });
   rl.prompt();
   rl.on("line", async (line) => {
@@ -5490,7 +5518,7 @@ function startRepl(rpc, watcher, remotePath, onFileChange) {
             break;
           }
           const dir = args[0] || ".";
-          await deployPlugin(path.resolve(dir), remotePath, rpc);
+          await deployPlugin(path.resolve(dir), remotePath, rpc, supportsRemoteTransfer);
           break;
         }
         case "watch": {

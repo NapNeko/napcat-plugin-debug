@@ -241,6 +241,19 @@ function createWatcher(
 // ======================== 部署逻辑 ========================
 
 /**
+ * 递归复制目录
+ */
+function copyDirRecursive(src: string, dest: string) {
+  if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) copyDirRecursive(srcPath, destPath);
+    else fs.copyFileSync(srcPath, destPath);
+  }
+}
+
+/**
  * 遍历本地目录，收集所有文件为 { path, content, encoding } 数组（base64 编码）
  */
 function collectFiles(dir: string, prefix: string = ''): Array<{ path: string; content: string; encoding: string }> {
@@ -284,6 +297,7 @@ async function deployPlugin(
   projectDir: string,
   remotePluginPath: string,
   rpc: RpcClient,
+  supportsRemoteTransfer: boolean,
 ): Promise<boolean> {
   const distDir = path.resolve(projectDir, 'dist');
   if (!fs.existsSync(distDir)) {
@@ -315,12 +329,20 @@ async function deployPlugin(
   logInfo(`部署 ${co(pluginName, C.bold, C.cyan)} → 远程插件目录`);
 
   try {
-    // 通过 RPC 清理远程插件目录
-    await rpc.call('removeDir', pluginName);
-    // 收集本地文件并通过 RPC 传输
-    const files = collectFiles(distDir, pluginName);
-    await rpc.call('writeFiles', files);
-    logOk(`文件传输完成 (${countFiles(distDir)} 个文件)`);
+    if (supportsRemoteTransfer) {
+      // RPC 文件传输（跨平台/远程安全）
+      await rpc.call('removeDir', pluginName);
+      const files = collectFiles(distDir, pluginName);
+      await rpc.call('writeFiles', files);
+    } else {
+      // 本地文件复制（同机调试）
+      const destPath = path.join(remotePluginPath, pluginName);
+      if (fs.existsSync(destPath)) {
+        fs.rmSync(destPath, { recursive: true, force: true });
+      }
+      copyDirRecursive(distDir, destPath);
+    }
+    logOk(`文件部署完成 (${countFiles(distDir)} 个文件)`);
   } catch (e: any) {
     logErr(`部署失败: ${e.message}`);
     return false;
@@ -328,22 +350,26 @@ async function deployPlugin(
 
   // 尝试重载插件
   try {
-    await rpc.call('reloadPlugin', pluginName);
-    logOk(`${co(pluginName, C.green, C.bold)} 重载成功`);
-  } catch {
-    // 插件可能尚未加载过，尝试直接从目录加载
-    try {
-      logInfo('插件未注册，尝试从目录加载...');
-      await rpc.call('loadDirectoryPlugin', pluginName);
-      // 新注册的插件默认禁用，需要启用并加载
+    const ok = await rpc.call('reloadPlugin', pluginName);
+    if (ok) {
+      logOk(`${co(pluginName, C.green, C.bold)} 重载成功`);
+    } else {
+      // 插件可能尚未注册，尝试直接从目录加载
+      logInfo('插件未注册或重载失败，尝试从目录加载...');
       try {
-        await rpc.call('setPluginStatus', pluginName, true);
-        await rpc.call('loadPluginById', pluginName);
-      } catch { /* 如果已经启用则忽略 */ }
-      logOk(`${co(pluginName, C.green, C.bold)} 首次加载成功`);
-    } catch (e2: any) {
-      logWarn(`自动加载失败: ${e2.message}，请手动 load ${pluginName}`);
+        await rpc.call('loadDirectoryPlugin', pluginName);
+        // 新注册的插件默认禁用，需要启用并加载
+        try {
+          await rpc.call('setPluginStatus', pluginName, true);
+          await rpc.call('loadPluginById', pluginName);
+        } catch { /* 如果已经启用则忽略 */ }
+        logOk(`${co(pluginName, C.green, C.bold)} 首次加载成功`);
+      } catch (e2: any) {
+        logWarn(`自动加载失败: ${e2.message}，请手动 load ${pluginName}`);
+      }
     }
+  } catch (e: any) {
+    logErr(`重载失败: ${e.message}`);
   }
 
   return true;
@@ -370,6 +396,7 @@ async function main() {
   let rpc: RpcClient | null = null;
   let watcher: ReturnType<typeof createWatcher> | null = null;
   let remotePluginPath: string | null = null;
+  let supportsRemoteTransfer = false;
   const dirToId = new Map<string, string>();
 
   async function refreshMap() {
@@ -409,9 +436,17 @@ async function main() {
           logInfo(`插件: ${info.loadedCount}/${info.pluginCount} 已加载`);
         } catch (e: any) { logWarn(`获取信息失败: ${e.message}`); }
 
+        // 探测服务端是否支持远程文件传输
+        try {
+          await rpc.call('removeDir', '__probe_nonexistent__');
+          supportsRemoteTransfer = true;
+        } catch {
+          supportsRemoteTransfer = false;
+        }
+
         // --deploy 模式：部署后退出
         if (opts.deploy && remotePluginPath && rpc) {
-          const ok = await deployPlugin(path.resolve(opts.deploy), remotePluginPath, rpc);
+          const ok = await deployPlugin(path.resolve(opts.deploy), remotePluginPath, rpc, supportsRemoteTransfer);
           ws.close(1000);
           process.exit(ok ? 0 : 1);
         }
@@ -425,7 +460,7 @@ async function main() {
           watcher.start();
         }
 
-        startRepl(rpc, watcher, remotePluginPath, onFileChange);
+        startRepl(rpc, watcher, remotePluginPath, onFileChange, supportsRemoteTransfer);
       }
       // 事件通知
       if (msg.method === 'event' && opts.verbose) {
@@ -457,6 +492,7 @@ function startRepl(
   watcher: ReturnType<typeof createWatcher> | null,
   remotePath: string | null,
   onFileChange: (d: string, f: string) => Promise<void>,
+  supportsRemoteTransfer: boolean,
 ) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: co('debug> ', C.cyan) });
   rl.prompt();
@@ -512,7 +548,7 @@ function startRepl(
         case 'deploy': {
           if (!remotePath) { logErr('远程插件目录未知，无法部署'); break; }
           const dir = args[0] || '.';
-          await deployPlugin(path.resolve(dir), remotePath, rpc);
+          await deployPlugin(path.resolve(dir), remotePath, rpc, supportsRemoteTransfer);
           break;
         }
         case 'watch': {

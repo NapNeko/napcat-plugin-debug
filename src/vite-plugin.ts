@@ -168,6 +168,16 @@ class SimpleRpcClient {
 
 // ======================== 工具函数 ========================
 
+function copyDirRecursive(src: string, dest: string) {
+    if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
+    for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+        const srcPath = path.join(src, entry.name);
+        const destPath = path.join(dest, entry.name);
+        if (entry.isDirectory()) copyDirRecursive(srcPath, destPath);
+        else fs.copyFileSync(srcPath, destPath);
+    }
+}
+
 function countFiles(dir: string): number {
     let count = 0;
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -215,6 +225,7 @@ export function napcatHmrPlugin(options: NapcatHmrPluginOptions = {}): Plugin {
 
     let rpc: SimpleRpcClient | null = null;
     let remotePluginPath: string | null = null;
+    let supportsRemoteTransfer = false;
     let connecting = false;
     let config: ResolvedConfig;
     let isFirstBuild = true;
@@ -266,6 +277,13 @@ export function napcatHmrPlugin(options: NapcatHmrPluginOptions = {}): Plugin {
                                 logOk(`已连接调试服务 (${info.loadedCount}/${info.pluginCount} 插件)`);
                                 log(`远程插件目录: ${co(info.pluginPath, C.dim)}`);
                             } catch { /* */ }
+                            // 探测服务端是否支持远程文件传输
+                            try {
+                                await rpc.call('removeDir', '__probe_nonexistent__');
+                                supportsRemoteTransfer = true;
+                            } catch {
+                                supportsRemoteTransfer = false;
+                            }
                             connecting = false;
                             resolve(true);
                         }
@@ -281,6 +299,7 @@ export function napcatHmrPlugin(options: NapcatHmrPluginOptions = {}): Plugin {
                 ws.on('close', () => {
                     rpc = null;
                     remotePluginPath = null;
+                    supportsRemoteTransfer = false;
                     connecting = false;
                 });
             });
@@ -319,21 +338,34 @@ export function napcatHmrPlugin(options: NapcatHmrPluginOptions = {}): Plugin {
             return;
         }
 
-        // 通过 RPC 清理远程插件目录
-        try {
-            await rpc.call('removeDir', pluginName);
-        } catch (e: any) {
-            logErr(`清理远程目录失败: ${e.message}`);
-            return;
-        }
-
-        // 收集主构建产物文件并通过 RPC 传输
-        try {
-            const files = collectFiles(distDir, pluginName);
-            await rpc.call('writeFiles', files);
-        } catch (e: any) {
-            logErr(`传输文件失败: ${e.message}`);
-            return;
+        // 部署文件到远程
+        if (supportsRemoteTransfer) {
+            // RPC 文件传输（跨平台/远程安全）
+            try {
+                await rpc.call('removeDir', pluginName);
+            } catch (e: any) {
+                logErr(`清理远程目录失败: ${e.message}`);
+                return;
+            }
+            try {
+                const files = collectFiles(distDir, pluginName);
+                await rpc.call('writeFiles', files);
+            } catch (e: any) {
+                logErr(`传输文件失败: ${e.message}`);
+                return;
+            }
+        } else {
+            // 本地文件复制（同机调试）
+            const destDir = path.join(remotePluginPath, pluginName);
+            try {
+                if (fs.existsSync(destDir)) {
+                    fs.rmSync(destDir, { recursive: true, force: true });
+                }
+                copyDirRecursive(distDir, destDir);
+            } catch (e: any) {
+                logErr(`复制文件失败: ${e.message}`);
+                return;
+            }
         }
 
         // 处理 WebUI 构建和部署
@@ -362,15 +394,21 @@ export function napcatHmrPlugin(options: NapcatHmrPluginOptions = {}): Plugin {
                 }
             }
 
-            // 将 WebUI 产物通过 RPC 传输到远程
+            // 将 WebUI 产物部署到远程
             if (!fs.existsSync(webuiDistDir)) {
                 logErr(`WebUI 产物目录不存在: ${webuiDistDir}`);
                 continue;
             }
 
             try {
-                const webuiFiles = collectFiles(webuiDistDir, `${pluginName}/${webuiTargetDir}`);
-                await rpc.call('writeFiles', webuiFiles);
+                if (supportsRemoteTransfer) {
+                    const webuiFiles = collectFiles(webuiDistDir, `${pluginName}/${webuiTargetDir}`);
+                    await rpc.call('writeFiles', webuiFiles);
+                } else {
+                    const destDir = path.join(remotePluginPath, pluginName);
+                    const webuiDestDir = path.join(destDir, webuiTargetDir);
+                    copyDirRecursive(webuiDistDir, webuiDestDir);
+                }
                 logOk(`WebUI (${webuiTargetDir}) 已部署 (${countFiles(webuiDistDir)} 个文件)`);
             } catch (e: any) {
                 logErr(`WebUI (${webuiTargetDir}) 部署失败: ${e.message}`);
@@ -378,15 +416,11 @@ export function napcatHmrPlugin(options: NapcatHmrPluginOptions = {}): Plugin {
         }
 
         // 重载插件
-        try {
-            const reloaded = await rpc.call('reloadPlugin', pluginName);
-            if (reloaded === false) {
-                // 插件未注册，走首次加载流程
-                throw new Error('not registered');
-            }
+        const reloaded = await rpc.call('reloadPlugin', pluginName);
+        if (reloaded) {
             logHmr(`${co(pluginName, C.green, C.bold)} 已重载 (${countFiles(distDir)} 个文件)`);
-        } catch {
-            // 首次加载 — loadDirectoryPlugin 期望插件目录名（非完整路径）
+        } else {
+            // 插件未注册或重载失败，走首次加载流程
             try {
                 await rpc.call('loadDirectoryPlugin', pluginName);
                 // 新注册的插件默认禁用，需要手动启用并加载
@@ -453,17 +487,25 @@ export function napcatHmrPlugin(options: NapcatHmrPluginOptions = {}): Plugin {
                 }
             }
 
-            // 将 WebUI 产物通过 RPC 传输到远程
+            // 将 WebUI 产物部署到远程
             if (!fs.existsSync(webuiDistDir)) {
                 logErr(`WebUI 产物目录不存在: ${webuiDistDir}`);
                 continue;
             }
 
             try {
-                // 先清理远程 WebUI 目录
-                await rpc.call('removeDir', `${pluginName}/${webuiTargetDir}`);
-                const webuiFiles = collectFiles(webuiDistDir, `${pluginName}/${webuiTargetDir}`);
-                await rpc.call('writeFiles', webuiFiles);
+                if (supportsRemoteTransfer) {
+                    await rpc.call('removeDir', `${pluginName}/${webuiTargetDir}`);
+                    const webuiFiles = collectFiles(webuiDistDir, `${pluginName}/${webuiTargetDir}`);
+                    await rpc.call('writeFiles', webuiFiles);
+                } else {
+                    const destDir = path.join(remotePluginPath, pluginName);
+                    const webuiDestDir = path.join(destDir, webuiTargetDir);
+                    if (fs.existsSync(webuiDestDir)) {
+                        fs.rmSync(webuiDestDir, { recursive: true, force: true });
+                    }
+                    copyDirRecursive(webuiDistDir, webuiDestDir);
+                }
                 logOk(`WebUI (${webuiTargetDir}) 已部署 (${countFiles(webuiDistDir)} 个文件)`);
                 hasChanges = true;
             } catch (e: any) {

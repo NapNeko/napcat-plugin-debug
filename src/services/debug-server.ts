@@ -188,9 +188,14 @@ export class DebugServer {
           break;
         }
 
-        case 'scanPlugins':
-          result = await pm.scanPlugins();
-          break;
+        case 'scanPlugins': {
+          // scanPlugins 不在 IPluginManager 公开接口中
+          // 用 loadDirectoryPlugin 或 reloadPlugin 替代
+          return {
+            jsonrpc: '2.0', id: req.id,
+            error: { code: -32601, message: 'scanPlugins 已弃用，请使用 getAllPlugins 获取插件列表' },
+          };
+        }
 
         case 'loadDirectoryPlugin':
           await pm.loadDirectoryPlugin(params[0] as string);
@@ -230,22 +235,22 @@ export class DebugServer {
           if (!Array.isArray(files)) {
             return { jsonrpc: '2.0', id: req.id, error: { code: -32602, message: 'params[0] must be an array of file entries' } };
           }
-          const pluginPath = pm.getPluginPath();
+          const fsModule = await import('fs');
+          const nodePath = await import('path');
+          const pluginPath = nodePath.resolve(pm.getPluginPath());
           let written = 0;
           for (const f of files) {
-            // 安全检查：只允许写入插件目录下
-            const fs = await import('fs');
-            const nodePath = await import('path');
+            // 安全检查：只允许写入插件目录下（normalize 后比较，兼容 Windows 大小写）
             const targetPath = nodePath.resolve(nodePath.join(pluginPath, f.path));
-            if (!targetPath.startsWith(pluginPath)) {
+            if (!targetPath.toLowerCase().startsWith(pluginPath.toLowerCase())) {
               return { jsonrpc: '2.0', id: req.id, error: { code: -32001, message: `路径越界: ${f.path}` } };
             }
             const dir = nodePath.dirname(targetPath);
-            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            if (!fsModule.existsSync(dir)) fsModule.mkdirSync(dir, { recursive: true });
             const buf = f.encoding === 'base64'
               ? Buffer.from(f.content, 'base64')
               : f.content;
-            fs.writeFileSync(targetPath, buf);
+            fsModule.writeFileSync(targetPath, buf);
             written++;
           }
           result = { written };
@@ -258,15 +263,15 @@ export class DebugServer {
           if (!relPath || typeof relPath !== 'string') {
             return { jsonrpc: '2.0', id: req.id, error: { code: -32602, message: 'params[0] must be a relative path string' } };
           }
-          const fs = await import('fs');
-          const nodePath = await import('path');
-          const pluginPath2 = pm.getPluginPath();
-          const targetDir = nodePath.resolve(nodePath.join(pluginPath2, relPath));
-          if (!targetDir.startsWith(pluginPath2)) {
+          const fsModule2 = await import('fs');
+          const nodePath2 = await import('path');
+          const pluginPath2 = nodePath2.resolve(pm.getPluginPath());
+          const targetDir = nodePath2.resolve(nodePath2.join(pluginPath2, relPath));
+          if (!targetDir.toLowerCase().startsWith(pluginPath2.toLowerCase())) {
             return { jsonrpc: '2.0', id: req.id, error: { code: -32001, message: `路径越界: ${relPath}` } };
           }
-          if (fs.existsSync(targetDir)) {
-            fs.rmSync(targetDir, { recursive: true, force: true });
+          if (fsModule2.existsSync(targetDir)) {
+            fsModule2.rmSync(targetDir, { recursive: true, force: true });
           }
           result = true;
           break;
